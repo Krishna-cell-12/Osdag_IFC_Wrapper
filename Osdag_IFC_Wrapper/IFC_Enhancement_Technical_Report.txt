@@ -1,0 +1,380 @@
+================================================================================
+  TECHNICAL REPORT
+  Enhancement of IFC Wrapper for Osdag's pythonOCC 3D CAD Models
+================================================================================
+
+  Author:       Osdag IFC Enhancement Team
+  Date:         April 2026
+  Version:      1.0
+  Design Code:  IS 800:2007
+  IFC Schema:   IFC2X3 (buildingSMART)
+
+
+TABLE OF CONTENTS
+─────────────────
+  1. Introduction
+  2. Methodology
+  3. IFC Functions & Entities Used
+  4. Module-Specific Implementations
+  5. Coordinate System Definitions
+  6. Overlap Detection
+  7. Revit Compatibility
+  8. Challenges & Solutions
+  9. References
+
+
+================================================================================
+1. INTRODUCTION
+================================================================================
+
+Osdag (Open Steel Design and Graphics) is an open-source software for the 
+design of steel connections as per Indian Standard IS 800:2007. The software 
+uses pythonOCC (OpenCASCADE Technology) for 3D CAD model generation and 
+visualization.
+
+This enhancement project extends Osdag's IFC (Industry Foundation Classes) 
+export capability to:
+
+  • Define global and local coordinate systems for structural connections
+  • Enable IFC-based CAD display alongside the existing BREP viewer
+  • Implement structural member overlap detection
+  • Ensure Revit compatibility for Bill of Quantities (BoQ) generation
+  • Cover 4 specific connection modules with tailored axis definitions
+
+
+================================================================================
+2. METHODOLOGY
+================================================================================
+
+2.1 Architecture
+────────────────
+The enhancement follows a layered architecture:
+
+  Layer 1: Axis Definitions (axis_definitions.py)
+    └─ Module-specific coordinate system handlers
+    └─ Global origin at (0,0,0) with IfcAxis2Placement3D
+    └─ Local placements relative to building storey
+       
+  Layer 2: IFC Generator (ifc_generator.py) [Enhanced]
+    └─ Orchestrates element creation with proper IfcLocalPlacement
+    └─ Material associations via IfcRelAssociatesMaterial
+    └─ Structural connectivity via IfcRelConnectsElements
+    └─ Automatic overlap detection and annotation
+    
+  Layer 3: Geometry Mapper (geometry_mapper.py) [Existing]
+    └─ Parametric profile generation (IfcIShapeProfileDef, etc.)
+    └─ Extruded area solid creation
+    └─ Boolean cut operations for bolt holes (LOD 500)
+    
+  Layer 4: Metadata Mapper (metadata_mapper.py) [Enhanced]
+    └─ Standard buildingSMART Property Sets
+    └─ Revit-compatible Qto_*BaseQuantities
+    └─ IfcMaterial associations
+
+2.2 Design Decisions
+────────────────────
+  a) IFC2X3 Schema: Chosen for maximum Revit compatibility. While IFC4
+     offers more features (IfcRelInterferesElements), IFC2X3 is universally
+     supported by all BIM software including Revit Student Version.
+     
+  b) Subprocess Isolation: IFC export runs in a separate Python subprocess
+     to prevent ifcopenshell memory issues from affecting the main GUI thread.
+     
+  c) Option A Display Strategy: The pythonOCC viewer is retained for live 3D
+     rendering. IFC viewing is implemented as an additional capability using
+     ifcopenshell.geom.create_shape() to convert IFC geometry back to OCC shapes.
+
+
+================================================================================
+3. IFC FUNCTIONS & ENTITIES USED
+================================================================================
+
+3.1 Spatial Structure
+─────────────────────
+  IfcProject
+    └─ Top-level container for the IFC model
+    └─ Contains RepresentationContexts and UnitsInContext
+    
+  IfcSite → IfcBuilding → IfcBuildingStorey
+    └─ Standard spatial hierarchy required by IFC specification
+    └─ Linked via IfcRelAggregates
+
+3.2 Coordinate Systems
+──────────────────────
+  IfcAxis2Placement3D
+    └─ Defines a 3D coordinate system with:
+       • Location: IfcCartesianPoint (origin)
+       • Axis: IfcDirection (Z-axis / vertical)
+       • RefDirection: IfcDirection (X-axis / reference)
+    └─ Used for both global world origin and local element placement
+    
+  IfcLocalPlacement
+    └─ Associates an IfcAxis2Placement3D with an element
+    └─ PlacementRelTo: Creates parent-child placement chains
+    └─ Every element gets a unique placement relative to the storey
+
+3.3 Structural Elements
+───────────────────────
+  IfcBeam
+    └─ Horizontal structural members (beams, tie members)
+    └─ Standard Pset_BeamCommon properties
+    
+  IfcColumn
+    └─ Vertical structural members
+    └─ Standard Pset_ColumnCommon properties
+    
+  IfcPlate
+    └─ Connection plates (end plates, cover plates, gusset plates)
+    └─ Standard Pset_PlateCommon properties
+    
+  IfcFastener
+    └─ Bolts, nuts, washers, and welds
+    └─ Pset_MechanicalFastenerCommon properties
+    
+  IfcElementAssembly
+    └─ Groups all elements of a connection into a single assembly
+    └─ PredefinedType: USERDEFINED
+    
+  IfcBuildingElementProxy
+    └─ Non-steel elements (concrete, grout) for base plate connections
+    
+  IfcOpeningElement
+    └─ Boolean subtraction for bolt holes in members and plates (LOD 500)
+
+3.4 Geometric Representations
+─────────────────────────────
+  IfcExtrudedAreaSolid
+    └─ Primary solid representation for all prismatic elements
+    └─ Profile + Direction + Depth = 3D solid
+    
+  IfcIShapeProfileDef
+    └─ Parametric I-section profile (beams, columns)
+    └─ Parameters: OverallWidth, OverallDepth, WebThickness,
+       FlangeThickness, FilletRadius
+    
+  IfcRectangleProfileDef
+    └─ Parametric rectangular profile (plates, stiffeners)
+    └─ Parameters: XDim, YDim
+    
+  IfcCircleProfileDef
+    └─ Circular profile (bolt holes)
+    └─ Parameters: Radius
+    
+  IfcMappedItem
+    └─ Instanced geometry for bolt/nut/washer repetition
+    └─ Reduces file size by reusing geometry definitions
+
+3.5 Relationships
+─────────────────
+  IfcRelContainedInSpatialStructure
+    └─ Links elements to the building storey
+    
+  IfcRelAggregates
+    └─ Hierarchical containment (Project→Site→Building→Storey)
+    └─ Assembly→Elements grouping
+    
+  IfcRelConnectsElements
+    └─ Structural connectivity between members (beam-column, beam-beam)
+    └─ Automatically created for adjacent members
+    
+  IfcRelAssociatesMaterial
+    └─ Links elements to IfcMaterial definitions
+    └─ Essential for Revit BoQ material schedules
+    
+  IfcRelDefinesByProperties
+    └─ Attaches Property Sets and Element Quantities to elements
+
+3.6 Properties & Quantities
+───────────────────────────
+  IfcPropertySet
+    └─ Standard: Pset_BeamCommon, Pset_ColumnCommon, Pset_PlateCommon
+    └─ Custom: Pset_OsdagDesignData, Pset_OsdagOverlapDetection
+    
+  IfcElementQuantity
+    └─ Standard: Qto_BeamBaseQuantities, Qto_PlateBaseQuantities
+    └─ Contains: IfcQuantityLength, IfcQuantityArea, IfcQuantityVolume,
+       IfcQuantityWeight, IfcQuantityCount
+
+
+================================================================================
+4. MODULE-SPECIFIC IMPLEMENTATIONS
+================================================================================
+
+4.1 Beam-to-Column End Plate (BCEndplate)
+─────────────────────────────────────────
+  CAD Classes: CADFillet, CADGroove, CADColWebFillet, CADcolwebGroove
+  
+  Components extracted:
+    • Column (IfcColumn) - vertical member at origin
+    • Beam (IfcBeam) - horizontal, offset by column.D/2 + plate.T
+    • End Plate (IfcPlate) - between column face and beam end
+    • Continuity Plates (IfcPlate) × 4
+    • Beam Stiffeners (IfcPlate) × 2 (for extended endplates)
+    • Bolt Array (IfcFastener) - through plate into column flange
+    • Welds (IfcFastener/WELD) - beam-to-plate connection
+
+4.2 Column-to-Column Cover Plate Welded
+────────────────────────────────────────
+  CAD Classes: CCSpliceCoverPlateWeldedCAD, CCSpliceCoverPlateBoltedCAD
+  
+  Components:
+    • Column 1 (IfcColumn) - lower column at origin
+    • Column 2 (IfcColumn) - upper column above splice
+    • Flange Cover Plates (IfcPlate) × 2-4
+    • Web Cover Plates (IfcPlate) × 2
+    • Welds (IfcFastener/WELD) - plate-to-column flange/web
+
+4.3 Beam-to-Beam Cover Plate Bolted
+────────────────────────────────────
+  CAD Classes: BBCoverPlateBoltedCAD, BBSpliceCoverPlateWeldedCAD
+  
+  Components:
+    • Beam Left (IfcBeam) - from origin
+    • Beam Right (IfcBeam) - from splice point
+    • Top Flange Cover Plate (IfcPlate)
+    • Bottom Flange Cover Plate (IfcPlate)
+    • Inner Flange Plates (IfcPlate) × 4
+    • Web Plates (IfcPlate) × 2
+    • Bolt Arrays (IfcFastener)
+
+4.4 Tension Member - Bolted to End Gusset
+──────────────────────────────────────────
+  CAD Classes: TensionAngleBoltCAD, TensionChannelBoltCAD, etc.
+  
+  Components:
+    • Tension Member (IfcBeam) - angle/channel section
+    • Gusset Plate (IfcPlate) × 1-2
+    • Bolt Array (IfcFastener) - connecting member to gusset
+
+
+================================================================================
+5. COORDINATE SYSTEM DEFINITIONS
+================================================================================
+
+5.1 Global Axis
+───────────────
+  Origin: (0, 0, 0) mm
+  X-axis: (1, 0, 0) - horizontal, along member width
+  Y-axis: (0, 1, 0) - horizontal, along member length
+  Z-axis: (0, 0, 1) - vertical, upward
+  
+  Implemented as IfcAxis2Placement3D at the world origin, serving as the
+  reference for all IfcLocalPlacement chains.
+
+5.2 Local Axes (Module-Specific)
+────────────────────────────────
+  Each component's local axis is extracted from its Osdag CAD attributes:
+    • sec_origin: Component's origin point in global coordinates
+    • uDir: Local X-axis direction (reference direction)
+    • wDir: Local Z-axis direction (extrusion/vertical)
+    
+  The local Y-axis is computed as: vDir = cross(wDir, uDir)
+  
+  Orthogonality is enforced: if |dot(wDir, uDir)| > 0.01, the vectors
+  are re-orthogonalized using Gram-Schmidt process.
+
+
+================================================================================
+6. OVERLAP DETECTION
+================================================================================
+
+  Algorithm: Axis-Aligned Bounding Box (AABB) intersection
+  
+  Steps:
+    1. Compute AABB for each structural member using its origin,
+       dimensions (D, B, L), and direction vectors (uDir, wDir)
+    2. Transform oriented bounding box corners to world coordinates
+    3. Compute AABB from the 8 corners
+    4. Perform pairwise AABB intersection tests
+    5. Report overlaps exceeding 1.0 mm³ threshold
+    
+  Output:
+    • Console report with overlap pairs and intersection volumes
+    • IFC annotation as Pset_OsdagOverlapDetection on the IfcProject
+
+
+================================================================================
+7. REVIT COMPATIBILITY
+================================================================================
+
+  Tested with: Revit Student Version (2024)
+  
+  Key compatibility features:
+    a) IFC2X3 schema - universally supported by Revit
+    b) Standard IfcBeam/IfcColumn/IfcPlate types mapped to Revit categories
+    c) IfcRelAssociatesMaterial → Revit material schedules
+    d) Qto_*BaseQuantities → Revit quantity takeoff
+    e) Pset_*Common → Revit property panels
+    f) IfcElementAssembly → Revit assembly instances
+
+
+================================================================================
+8. CHALLENGES & SOLUTIONS
+================================================================================
+
+  Challenge 1: Cross-Process Memory Safety
+    Problem: ifcopenshell and pythonOCC share OpenCASCADE memory pools,
+             causing segfaults when used in the same process.
+    Solution: Subprocess isolation via subprocess_ifc_exporter.py.
+              CAD data is serialized to JSON, sent to a child process
+              that imports ifcopenshell independently.
+
+  Challenge 2: Geometry Attribute Extraction
+    Problem: Osdag uses 28+ different CAD component classes with
+             inconsistent attribute naming (D vs d, L vs length, etc.)
+    Solution: Robust attribute discovery with getattr() chains and
+             fallback values. The cad_extraction.py module has explicit
+             handlers for each connection type.
+
+  Challenge 3: Orthogonality of Axis Vectors
+    Problem: Some Osdag components have non-orthogonal uDir/wDir vectors
+             due to floating point precision or modeling conventions.
+    Solution: Automatic Gram-Schmidt orthogonalization in
+             _create_element_placement() when |dot(z, x)| > 0.01.
+
+  Challenge 4: IFC2X3 vs IFC4 Schema Differences
+    Problem: IFC4 renames several attributes (e.g., IfcPerson.Id →
+             IfcPerson.Identification) and adds new entities.
+    Solution: Schema-conditional creation in setup_header() and
+             conditional quantity parameter counts in metadata_mapper.py.
+
+  Challenge 5: Double-Transformation ("Exploded View") Anomaly
+    Problem: When exporting parametric IFC solids (IfcExtrudedAreaSolid) 
+            generated from pythonOCC, applying global coordinates to both the underlying 
+            geometry generation and the IfcLocalPlacement matrix resulted in a double-translation 
+            effect. External BIM viewers (like Revit and web-based IFC viewers) read both 
+            transforms, causing the connection elements to "explode" outward away from each other.
+    Solution: Refactored the geometry pipeline to enforce strict IFC standard compliance. 
+              Modified the geometry_mapper to author all parametric geometry in local space 
+              (Identity matrix). The true global coordinates, including the translation origin
+              (sec_origin) and rotational vectors (uDir, wDir), are now exclusively carried 
+              by the IfcLocalPlacement (ObjectPlacement) node. This completely eliminated the
+              double-transform bug, ensuring flawless cross-platform assembly and rendering 
+              while maintaining rigorous coordinate tracking.           
+
+
+================================================================================
+9. REFERENCES
+================================================================================
+
+  [1] buildingSMART International. IFC2x3 Technical Corrigendum 1.
+      https://standards.buildingsmart.org/IFC/RELEASE/IFC2x3/TC1/HTML/
+
+  [2] buildingSMART International. IFC4 Add2 Technical Corrigendum 1.
+      https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/
+
+  [3] IS 800:2007 - Indian Standard: General Construction in Steel.
+      Bureau of Indian Standards.
+
+  [4] Osdag Documentation. https://osdag.fossee.in/
+
+  [5] IfcOpenShell Documentation. http://ifcopenshell.org/
+
+  [6] pythonOCC Documentation. http://www.pythonocc.org/
+
+  [7] Autodesk Revit IFC Manual.
+      https://knowledge.autodesk.com/support/revit/learn-explore/ifc
+
+================================================================================
+  END OF REPORT
+================================================================================
